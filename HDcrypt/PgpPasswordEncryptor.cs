@@ -23,7 +23,6 @@ namespace HDcrypt
 
             var random = new SecureRandom();
 
-            // Use PgpEncryptedDataGenerator for password-based encryption
             var encGen = new PgpEncryptedDataGenerator(
                 SymmetricKeyAlgorithmTag.Aes256,
                 withIntegrity,
@@ -57,7 +56,7 @@ namespace HDcrypt
 
             CopyStream(input, literalOut);
 
-            // Close in reverse order to flush and finish packets
+            // Close in reverse order
             literalOut.Close();
             compStream?.Dispose();
             encryptedOut.Close();
@@ -75,7 +74,6 @@ namespace HDcrypt
             Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath)) ?? ".");
 
             using var input = File.OpenRead(inputPath);
-            // Auto-handle ASCII armor and binary formats
             using var decoderStream = PgpUtilities.GetDecoderStream(input);
             var pgpFactory = new PgpObjectFactory(decoderStream);
 
@@ -83,11 +81,9 @@ namespace HDcrypt
             if (obj == null)
                 throw new PgpException("Invalid PGP data: no objects found.");
 
-            // Encrypted data may not be first if there are markers; handle both direct encrypted and other wrappers.
             PgpEncryptedDataList? encList = obj as PgpEncryptedDataList;
             if (encList == null)
             {
-                // Sometimes the first object is a PgpMarker; fetch next
                 obj = pgpFactory.NextPgpObject();
                 encList = obj as PgpEncryptedDataList;
             }
@@ -95,7 +91,6 @@ namespace HDcrypt
             if (encList == null)
                 throw new PgpException("Invalid PGP data: expected encrypted data list.");
 
-            // We only support password-based encrypted data (PBE)
             PgpPbeEncryptedData? pbe = null;
             foreach (PgpEncryptedData ed in encList.GetEncryptedDataObjects())
             {
@@ -116,10 +111,11 @@ namespace HDcrypt
             if (message == null)
                 throw new PgpException("Invalid PGP data: empty message.");
 
-            // Data may be compressed; unwrap if needed
+            // Keep compressed stream open until after copy & integrity verification
+            Stream? compDataStream = null;
             if (message is PgpCompressedData compressedData)
             {
-                using var compDataStream = compressedData.GetDataStream();
+                compDataStream = compressedData.GetDataStream();
                 var compFactory = new PgpObjectFactory(compDataStream);
                 message = compFactory.NextPgpObject();
             }
@@ -131,14 +127,17 @@ namespace HDcrypt
             using var output = File.Create(outputPath);
             CopyStream(literalStream, output);
 
-            // Verify integrity if present
+            // Verify integrity before disposing compressed stream
             if (pbe.IsIntegrityProtected())
             {
                 if (!pbe.Verify())
                 {
+                    compDataStream?.Dispose();
                     throw new PgpException("PGP integrity check failed (bad MDC or wrong password).");
                 }
             }
+
+            compDataStream?.Dispose();
         }
 
         private static void CopyStream(Stream input, Stream output)

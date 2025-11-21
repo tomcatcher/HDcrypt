@@ -3,7 +3,7 @@
 // Usage:
 //   Encrypt/Decrypt (password): HDcrypt.exe -e|-d -p <password> -i <input file> -o <output file>
 //   Encrypt/Decrypt (keys):     HDcrypt.exe -e|-d -k <key file> [-p <passphrase>] -i <input file> -o <output file>
-//   Generate key pair:          HDcrypt.exe -g <userId/email> -o <output prefix> [-p <passphrase>]
+//   Generate key pair:          HDcrypt.exe -g <userId/email> -o <output prefix> [-p <passphrase>""]
 
 using System;
 using System.IO;
@@ -29,11 +29,12 @@ namespace HDcrypt
                 bool overwrite = false;
                 bool withIntegrity = true;
                 string? compressionStr = "ZIP"; // default
-                string? password = null; // password or key passphrase
+                string? password = null; // password or key passphrase (captured interactively)
                 string? inputFile = null;
                 string? outputFile = null; // output file for encrypt/decrypt; prefix for key generation
                 string? keyFile = null; // key file (public for encryption, private for decryption)
                 string? generateUserId = null; // user id (email) for key generation
+                bool promptPassword = false; // whether to ask interactively
 
                 for (int i = 0; i < args.Length; i++)
                 {
@@ -46,7 +47,8 @@ namespace HDcrypt
                             decrypt = true;
                             break;
                         case "-p":
-                            if (i + 1 < args.Length) password = args[++i];
+                            // Interactive password/passphrase prompt (no value consumed)
+                            promptPassword = true;
                             break;
                         case "-k":
                             if (i + 1 < args.Length) keyFile = args[++i];
@@ -81,6 +83,19 @@ namespace HDcrypt
 
                 bool generationMode = !string.IsNullOrEmpty(generateUserId);
                 bool keyMode = !string.IsNullOrEmpty(keyFile);
+
+                // Prompt for password/passphrase if requested
+                if (promptPassword)
+                {
+                    string prompt = generationMode
+                        ? "Enter passphrase (leave empty for none): "
+                        : keyMode && decrypt
+                            ? "Enter private key passphrase (leave empty if none): "
+                            : keyMode && encrypt
+                                ? "Enter private key protection passphrase (leave empty if none): "
+                                : "Enter password: ";
+                    password = ReadHiddenInput(prompt, allowEmpty: generationMode || keyMode);
+                }
 
                 // Validate mode combinations
                 if (generationMode && (encrypt || decrypt))
@@ -126,9 +141,10 @@ namespace HDcrypt
                     return 3;
                 }
 
+                // For password-based (no key file) operations, password required
                 if (!keyMode && string.IsNullOrEmpty(password))
                 {
-                    Console.Error.WriteLine("Password is required when no key file is provided (-p <password> or use -k <keyfile>).\n");
+                    Console.Error.WriteLine("Password required. Use -p to enter it interactively.\n");
                     PrintUsage();
                     return 1;
                 }
@@ -202,23 +218,55 @@ namespace HDcrypt
                 "This tool can encrypt, decrypt files, or generate PGP key pairs.\r\n" +
                 "Password-based (symmetric) and public/private key encryption supported.\r\n" +
                 "Usage:\r\n" +
-                "  Encrypt (password): HDcrypt.exe -e -p <password> -i <input> -o <output> [options]\r\n" +
-                "  Decrypt (password): HDcrypt.exe -d -p <password> -i <input> -o <output> [options]\r\n" +
-                "  Encrypt (key):      HDcrypt.exe -e -k <publickey.asc> -i <input> -o <output> [options]\r\n" +
-                "  Decrypt (key):      HDcrypt.exe -d -k <privatekey.asc> [-p <passphrase>] -i <input> -o <output> [options]\r\n" +
-                "  Generate keys:      HDcrypt.exe -g <userId/email> -o <prefix> [-p <passphrase>]\r\n" +
+                "  Encrypt (password): HDcrypt.exe -e -p -i <input> -o <output> [options]\r\n" +
+                "  Decrypt (password): HDcrypt.exe -d -p -i <input> -o <output> [options]\r\n" +
+                "  Encrypt (key):      HDcrypt.exe -e -k <publickey.asc> [-p] -i <input> -o <output> [options]\r\n" +
+                "  Decrypt (key):      HDcrypt.exe -d -k <privatekey.asc> [-p] -i <input> -o <output> [options]\r\n" +
+                "  Generate keys:      HDcrypt.exe -g <userId/email> -o <prefix> [-p]\r\n" +
                 "\r\nOptions:\r\n" +
                 "  -a                         Output ASCII armor (encryption only)\r\n" +
                 "  -k <key file>              Key file (public for -e, private for -d)\r\n" +
                 "  -g <userId/email>          Generate a new key pair (requires -o prefix)\r\n" +
-                "  -p <password|passphrase>   Password (symmetric) or private key passphrase / key protection\r\n" +
+                "  -p                         Prompt for password / passphrase securely (no echo)\r\n" +
                 "  -c <ZIP|ZLIB|BZIP2|NONE>   Compression algorithm (default: ZIP)\r\n" +
                 "  --overwrite                Overwrite output file if it exists (encrypt/decrypt)\r\n" +
                 "  --no-integrity             Disable integrity protection (MDC)\r\n" +
                 "  -h|--help                  Show this help\r\n" +
                 "\r\nNotes:\r\n" +
-                "  - Key generation produces: <prefix>-public.asc and <prefix>-private.asc\r\n" +
-                "  - Passphrase (-p) optional for key generation; omit for unprotected private key.\r\n");
+                "  - Password is required for symmetric encryption/decryption; -p triggers interactive hidden entry.\r\n" +
+                "  - Key generation passphrase optional; use -p to set one (leave blank for none).\r\n" +
+                "  - Private key decryption passphrase optional; use -p to enter if needed.\r\n");
+        }
+
+        static string? ReadHiddenInput(string prompt, bool allowEmpty)
+        {
+            Console.Write(prompt);
+            var chars = new System.Collections.Generic.List<char>();
+            while (true)
+            {
+                var key = Console.ReadKey(intercept: true);
+                if (key.Key == ConsoleKey.Enter)
+                {
+                    Console.WriteLine();
+                    if (!allowEmpty && chars.Count == 0)
+                    {
+                        Console.WriteLine("Value cannot be empty.");
+                        Console.Write(prompt);
+                        continue;
+                    }
+                    break;
+                }
+                if (key.Key == ConsoleKey.Backspace)
+                {
+                    if (chars.Count > 0) chars.RemoveAt(chars.Count - 1);
+                    continue;
+                }
+                if (!char.IsControl(key.KeyChar))
+                {
+                    chars.Add(key.KeyChar);
+                }
+            }
+            return chars.Count == 0 ? null : new string(chars.ToArray());
         }
     }
 }

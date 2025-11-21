@@ -132,9 +132,10 @@ namespace HDcrypt
             if (message == null)
                 throw new PgpException("Invalid PGP data: empty message.");
 
+            Stream? compDataStream = null;
             if (message is PgpCompressedData compressedData)
             {
-                using var compDataStream = compressedData.GetDataStream();
+                compDataStream = compressedData.GetDataStream();
                 var compFactory = new PgpObjectFactory(compDataStream);
                 message = compFactory.NextPgpObject();
             }
@@ -150,9 +151,12 @@ namespace HDcrypt
             {
                 if (!pke.Verify())
                 {
+                    compDataStream?.Dispose();
                     throw new PgpException("PGP integrity check failed (bad MDC or wrong passphrase).");
                 }
             }
+
+            compDataStream?.Dispose();
         }
 
         private static PgpPublicKey? ReadEncryptionKey(string publicKeyPath)
